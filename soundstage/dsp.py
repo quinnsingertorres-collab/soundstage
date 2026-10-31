@@ -397,7 +397,24 @@ class MixChain:
         # meters (read by the UI)
         self.in_peak = np.zeros(2)
         self.out_peak = np.zeros(2)
+        # Windows master volume: (input compensation, output volume) as linear gains
+        self._sys_target = (1.0, 1.0)
+        self._sys_prev = (1.0, 1.0)
         self._apply_pending()
+
+    def set_system_volume(self, db: float, muted: bool, compensate: bool = True):
+        """Follow the Windows master volume (the volume keys).
+
+        Windows applies that volume to CABLE Input *before* Soundstage hears it.
+        With compensate=True the attenuation is undone on the way in, so the EQ,
+        compressor and limiter always work on full-level audio, and the volume
+        is applied at the very end instead. Loudness is unchanged; the mix
+        sounds the same at every volume.
+        """
+        db = float(min(0.0, db))
+        vol = 0.0 if muted else float(db_to_lin(db))
+        comp = float(db_to_lin(min(-db, 60.0))) if compensate else 1.0
+        self._sys_target = (comp, vol)
 
     # Called from the UI thread
     def set_params(self, params: dict):
@@ -439,11 +456,19 @@ class MixChain:
             x = np.repeat(x, 2, axis=1)
         elif x.shape[1] > 2:
             x = x[:, :2]
-        self.in_peak = np.max(np.abs(x), axis=0) if len(x) else np.zeros(2)
         p = self.p
-        if p["bypass"]:
-            self.out_peak = self.in_peak
+        if p["bypass"] or len(x) == 0:
+            # Windows has already applied its volume; pass through untouched.
+            self.in_peak = self.out_peak = np.max(np.abs(x), axis=0) if len(x) else np.zeros(2)
+            self._sys_prev = self._sys_target
             return x.astype(np.float32)
+
+        # Smoothly ramp volume changes across the block (no zipper noise).
+        (c0, v0), (c1, v1) = self._sys_prev, self._sys_target
+        self._sys_prev = (c1, v1)
+        ramp = np.linspace(0.0, 1.0, len(x), endpoint=False)[:, None]
+        x = x * (c0 + (c1 - c0) * ramp)
+        self.in_peak = np.max(np.abs(x), axis=0)
 
         x = x * self._in_gain
         x = self.eq.process(x)
@@ -462,5 +487,6 @@ class MixChain:
             x = self.limiter.process(x)
         else:
             x = np.clip(x, -1.0, 1.0)
-        self.out_peak = np.max(np.abs(x), axis=0) if len(x) else np.zeros(2)
+        x = x * (v0 + (v1 - v0) * ramp)
+        self.out_peak = np.max(np.abs(x), axis=0)
         return x.astype(np.float32)

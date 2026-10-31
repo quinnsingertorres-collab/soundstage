@@ -90,3 +90,25 @@ def test_realtime_speed():
     elapsed = time.perf_counter() - start
     # must run well faster than real time (5 s of audio)
     assert elapsed < 5.0 * 0.35, elapsed
+
+
+def test_volume_keys_keep_mix_identical():
+    """Windows attenuates CABLE Input; Soundstage undoes it and re-applies at the end."""
+    x = music(2.0) * 0.8
+    reference = MixChain(FS)
+    reference.set_params(professional(0.6))
+    full = run(reference, x)
+    for db in (-6.0, -20.0, -40.0):
+        chain = MixChain(FS)
+        chain.set_params(professional(0.6))
+        chain.set_system_volume(db, False)
+        chain._sys_prev = chain._sys_target          # skip the start-up ramp
+        y = run(chain, x * 10 ** (db / 20))          # what Windows hands us
+        assert np.allclose(y, full * 10 ** (db / 20), atol=1e-4), db
+
+
+def test_mute_key_silences():
+    chain = MixChain(FS)
+    chain.set_system_volume(-10, True)
+    chain._sys_prev = chain._sys_target
+    assert np.abs(run(chain, music(0.5))).max() == 0

@@ -10,6 +10,7 @@ browser, Discord — runs through Soundstage before it reaches your speakers.
   EQ, glue compression, console warmth, a wider stage and a real venue around it
   (Studio, Club, Theater, Arena), with a *Live feel* slider. Hit **Fine-tune in
   mixer** to take it from there.
+- Keyboard volume and mute keys control the master volume.
 - Presets (built-in and your own), bypass, tray icon, settings remembered.
 
 ## Download
@@ -24,6 +25,18 @@ code-signed; choose **More info → Run anyway**.)
 2. Windows **Settings → System → Sound → Output**: choose **CABLE Input**.
 3. Open Soundstage. It captures CABLE Output, mixes it, and plays the result on
    your real speakers/headphones (change which in **Settings**).
+4. Set your speakers' own volume to 100% once (Sound settings → your speakers →
+   Volume). From then on, your keyboard's volume and mute keys drive Soundstage's
+   **Master** fader.
+
+### Volume keys
+
+With your output on CABLE Input, the volume keys change CABLE Input's volume, and
+Windows turns the audio down *before* Soundstage hears it. Soundstage reads that
+volume, undoes the cut on the way in, and applies it after the mix instead, so the
+compressor, EQ and Professional mode sound the same at every volume — only quieter.
+The Master fader in the Apps tab moves with your keys, and dragging it moves the
+Windows volume.
 
 > While your output is set to CABLE Input, you only hear audio while Soundstage is
 > running. Closing the window keeps it mixing in the tray; to stop using it, set

@@ -136,11 +136,12 @@ class ChannelStrip(QFrame):
 
 
 class MasterStrip(QFrame):
-    """Output level (dB) with a stereo meter."""
+    """The Windows master volume — the same thing your keyboard volume keys move."""
 
-    gainChanged = Signal(float)   # dB
+    volumeChanged = Signal(float)   # 0..1
+    muteToggled = Signal(bool)
 
-    def __init__(self, gain_db: float = 0.0, parent=None):
+    def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("strip")
         self.setProperty("master", True)
@@ -152,15 +153,15 @@ class MasterStrip(QFrame):
         t.setAlignment(Qt.AlignCenter)
         t.setStyleSheet(f"color:{theme.ACCENT}; font-weight:600;")
         lay.addWidget(t)
-        sub = QLabel("after the mix")
+        sub = QLabel("volume keys")
         sub.setObjectName("subtle")
         sub.setAlignment(Qt.AlignCenter)
+        sub.setToolTip("Your keyboard's volume and mute keys move this fader")
         lay.addWidget(sub)
         mid = QHBoxLayout()
         mid.addStretch(1)
         self.fader = QSlider(Qt.Vertical)
-        self.fader.setRange(-240, 120)   # tenths of a dB
-        self.fader.setValue(round(gain_db * 10))
+        self.fader.setRange(0, 100)
         self.fader.setMinimumHeight(170)
         self.fader.valueChanged.connect(self._changed)
         mid.addWidget(self.fader)
@@ -171,19 +172,31 @@ class MasterStrip(QFrame):
         self.readout = QLabel()
         self.readout.setAlignment(Qt.AlignCenter)
         lay.addWidget(self.readout)
-        reset = QPushButton("0 dB")
-        reset.clicked.connect(lambda: self.fader.setValue(0))
-        lay.addWidget(reset)
+        self.mute = QPushButton("Mute")
+        self.mute.setObjectName("mute")
+        self.mute.setCheckable(True)
+        self.mute.toggled.connect(self._muted)
+        lay.addWidget(self.mute)
         self._changed(self.fader.value(), emit=False)
 
     def _changed(self, v, emit=True):
-        db = v / 10
-        self.readout.setText(f"{db:+.1f} dB" if abs(db) > 0.04 else "0.0 dB")
+        self.readout.setText(f"{v}%")
         if emit:
-            self.gainChanged.emit(db)
+            self.volumeChanged.emit(v / 100.0)
 
-    def set_gain(self, db: float):
-        self.fader.blockSignals(True)
-        self.fader.setValue(round(db * 10))
-        self.fader.blockSignals(False)
-        self._changed(self.fader.value(), emit=False)
+    def _muted(self, m):
+        self.readout.setStyleSheet(f"color:{theme.DANGER};" if m else "")
+        self.muteToggled.emit(m)
+
+    def show_volume(self, scalar: float, muted: bool):
+        """Reflect the Windows volume without echoing it back."""
+        if not self.fader.isSliderDown():
+            self.fader.blockSignals(True)
+            self.fader.setValue(round(scalar * 100))
+            self.fader.blockSignals(False)
+            self._changed(self.fader.value(), emit=False)
+        if self.mute.isChecked() != muted:
+            self.mute.blockSignals(True)
+            self.mute.setChecked(muted)
+            self.mute.blockSignals(False)
+            self.readout.setStyleSheet(f"color:{theme.DANGER};" if muted else "")

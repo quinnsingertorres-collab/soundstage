@@ -14,7 +14,7 @@ from ..config import Settings
 from ..dsp import DEFAULT_PARAMS
 from ..engine import AudioEngine
 from ..presets import BUILTIN_PRESETS, VENUES, professional
-from ..sessions import SessionManager
+from ..sessions import SessionManager, SystemVolume
 from . import theme
 from .icons import app_icon, icon_pixmap
 from .strips import ChannelStrip, MasterStrip, app_icon as program_icon
@@ -86,6 +86,10 @@ class MainWindow(QMainWindow):
         self._save_timer = QTimer(self, singleShot=True, interval=800, timeout=self._save)
         self._meter_timer = QTimer(self, interval=33, timeout=self._tick_meters)
         self._meter_timer.start()
+        self.sysvol = SystemVolume()
+        self._last_vol = None
+        self._volume_timer = QTimer(self, interval=60, timeout=self._poll_volume)
+        self._volume_timer.start()
         self._session_timer = QTimer(self, interval=1500, timeout=self.refresh_sessions)
         self._session_timer.start()
         self._routing_timer = QTimer(self, interval=5000, timeout=self._auto_recheck)
@@ -236,6 +240,8 @@ class MainWindow(QMainWindow):
         was_running = self.engine.running
         self.engine.stop()
         eng.refresh_devices()
+        self.sysvol.reset()
+        self._last_vol = None
         status = eng.routing_status()
         if status != "no-cable" or was_running:
             self.start_engine(update_banner=False)
@@ -361,8 +367,9 @@ class MainWindow(QMainWindow):
         self.apps_row.addStretch(1)
         self.apps_scroll.setWidget(holder)
         lay.addWidget(self.apps_scroll, 1)
-        self.master = MasterStrip(self.custom_params["output_gain"])
-        self.master.gainChanged.connect(lambda db: self.on_param("output_gain", db))
+        self.master = MasterStrip()
+        self.master.volumeChanged.connect(self._set_master_volume)
+        self.master.muteToggled.connect(self._set_master_mute)
         lay.addWidget(self.master)
         return page
 
@@ -601,7 +608,6 @@ class MainWindow(QMainWindow):
             self._select_preset(None)
         self.custom_params[key] = value
         if key == "output_gain":
-            self.master.set_gain(value)
             self.knobs["output_gain"].setValue(value)
         if refresh and key not in ("output_gain",):
             self._refresh_toggles(self.current_params())
@@ -633,7 +639,6 @@ class MainWindow(QMainWindow):
             k.setValue(p[key])
             k.update()
         self._refresh_toggles(p)
-        self.master.set_gain(p["output_gain"])
         self.eq_curve.set_params(p, color)
 
     def set_mode(self, mode, push=True):
@@ -700,6 +705,39 @@ class MainWindow(QMainWindow):
         self._fill_presets()
         self._save()
 
+    # ------------------------------------------------------------------ master volume (volume keys)
+    def _following_windows_volume(self) -> bool:
+        # Only once Windows plays into CABLE Input: then the volume keys move
+        # CABLE Input's volume, which is what we read here.
+        return (not self.sysvol.available) or getattr(self, "_routing", "") == "ok"
+
+    def _poll_volume(self):
+        reading = self.sysvol.read() if self._following_windows_volume() else None
+        chain = self.engine.chain
+        if reading is None:
+            key = ("off", id(chain))
+            if key != self._last_vol:
+                self._last_vol = key
+                chain.set_system_volume(0.0, False, compensate=False)
+            return
+        scalar, db, muted = reading
+        self.master.show_volume(scalar, muted)
+        key = (round(scalar, 4), round(db, 2), muted, id(chain))
+        if key != self._last_vol:
+            self._last_vol = key
+            # Windows turns CABLE Input down in software before we hear it; undo that
+            # on the way in and apply the volume after the mix instead.
+            compensate = self.sysvol.available and not self.sysvol.hardware_volume
+            chain.set_system_volume(db, muted, compensate=compensate)
+
+    def _set_master_volume(self, v):
+        self.sysvol.set_scalar(v)
+        self._poll_volume()
+
+    def _set_master_mute(self, m):
+        self.sysvol.set_mute(m)
+        self._poll_volume()
+
     # ------------------------------------------------------------------ meters & status
     def _tick_meters(self):
         chain = self.engine.chain
@@ -747,6 +785,8 @@ class MainWindow(QMainWindow):
         self.engine.output_device = self._device_index(self.settings.get("output_device"), "output")
         self.engine.start()
         self.push_params()   # the chain may have been rebuilt for a new sample rate
+        self._last_vol = None
+        self._poll_volume()
         if update_banner:
             self._update_routing(eng.routing_status())
         self._update_status()

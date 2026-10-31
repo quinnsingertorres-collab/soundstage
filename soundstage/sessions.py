@@ -16,7 +16,7 @@ IS_WINDOWS = sys.platform == "win32"
 
 if IS_WINDOWS:
     try:
-        from pycaw.pycaw import AudioUtilities, IAudioMeterInformation
+        from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume, IAudioMeterInformation
     except Exception:  # pragma: no cover
         AudioUtilities = None
 else:
@@ -128,6 +128,90 @@ class SessionManager:
                 continue
         order = sorted(groups.values(), key=lambda g: (g.key == "system", g.name.lower()))
         return order
+
+
+# ---------------------------------------------------------------------------
+# Windows master volume (what the keyboard volume keys change)
+# ---------------------------------------------------------------------------
+
+ENDPOINT_HARDWARE_SUPPORT_VOLUME = 0x1
+
+
+class SystemVolume:
+    """Reads and sets the default output device's volume and mute.
+
+    Once routing is set up the default device is CABLE Input, so this is
+    exactly what the volume keys and the Windows volume flyout control.
+    """
+
+    def __init__(self):
+        self.available = IS_WINDOWS and AudioUtilities is not None
+        self._ep = None
+        self.hardware_volume = False
+        self._demo = [0.6, False]
+
+    def reset(self):
+        """Forget the cached device (call after the default device changes)."""
+        self._ep = None
+
+    def _endpoint(self):
+        if not self.available:
+            return None
+        if self._ep is None:
+            try:
+                dev = AudioUtilities.GetSpeakers()
+                ep = getattr(dev, "EndpointVolume", None)       # newer pycaw
+                if ep is None:                                   # older pycaw
+                    from ctypes import POINTER, cast
+                    from comtypes import CLSCTX_ALL
+                    iface = dev.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+                    ep = cast(iface, POINTER(IAudioEndpointVolume))
+                try:
+                    self.hardware_volume = bool(ep.QueryHardwareSupport() & ENDPOINT_HARDWARE_SUPPORT_VOLUME)
+                except Exception:
+                    self.hardware_volume = False
+                self._ep = ep
+            except Exception:
+                self._ep = None
+        return self._ep
+
+    def read(self):
+        """(scalar 0..1, level dB, muted) or None if unavailable."""
+        if not self.available:
+            v, m = self._demo
+            return v, (20 * math.log10(v) if v > 0 else -96.0), m
+        ep = self._endpoint()
+        if ep is None:
+            return None
+        try:
+            return (float(ep.GetMasterVolumeLevelScalar()), float(ep.GetMasterVolumeLevel()),
+                    bool(ep.GetMute()))
+        except Exception:
+            self._ep = None
+            return None
+
+    def set_scalar(self, v: float):
+        v = max(0.0, min(1.0, v))
+        if not self.available:
+            self._demo[0] = v
+            return
+        ep = self._endpoint()
+        if ep is not None:
+            try:
+                ep.SetMasterVolumeLevelScalar(v, None)
+            except Exception:
+                self._ep = None
+
+    def set_mute(self, m: bool):
+        if not self.available:
+            self._demo[1] = bool(m)
+            return
+        ep = self._endpoint()
+        if ep is not None:
+            try:
+                ep.SetMute(1 if m else 0, None)
+            except Exception:
+                self._ep = None
 
 
 # ---------------------------------------------------------------------------
